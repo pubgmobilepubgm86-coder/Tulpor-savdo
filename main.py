@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 LOYIHA: TULPOR SAVDO MARKAZI BOTI
-YANGILANISH: Promokod limitlari (1 kishiga 1 ta), To'liq bot statistikasi, Rasm/Matnli Broadcast, va 'Top Xaridorlar Reytingi' tizimi qo'shildi. Avvalgi barcha kodlar 100% saqlangan.
+YANGILANISH: Barcha eski sozlamalar (Statistika, Promokod, Top Xaridorlar) 100% saqlangan holda,
+Yangi funksiyalar: Jonli lokatsiyani adminga yuborish, Do'kon lokatsiyasi, Video qo'llanma, Guruhni o'chirish va Tovarni mukammal tahrirlash qo'shildi.
 """
 
 import os
@@ -106,7 +107,6 @@ def init_database():
         )
     """)
     
-    # 1 odam 1 marta olishi uchun yordamchi jadval
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS used_promocodes (
             user_id INTEGER,
@@ -126,7 +126,10 @@ def init_database():
         )
     """)
     
-    # Baza yangilanishlari (xatolik bermasligi uchun try-except)
+    # YANGI QO'SHILGAN BAZA JADVALLARI: Lokatsiya va Video qo'llanma uchun
+    cursor.execute("CREATE TABLE IF NOT EXISTS shop_location (id INTEGER PRIMARY KEY, latitude REAL, longitude REAL)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS manual (id INTEGER PRIMARY KEY, file_id TEXT, caption TEXT)")
+    
     try: cursor.execute("ALTER TABLE orders ADD COLUMN status TEXT DEFAULT 'pending'")
     except sqlite3.OperationalError: pass
     
@@ -136,7 +139,7 @@ def init_database():
     cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('about_text', '🐎 Tulpor savdo markazi - Biz sizga eng sifatli mahsulotlarni eng hamyonbop narxlarda taqdim etamiz!')")
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('delivery_text', '🚚 Yetkazib berish shartlari:\nNamangan viloyati va Chortoq tumani bo''ylab tezkor hamda xavfsiz yetkazib berish xizmati mavjud.')")
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('tovarlar_clicks', '0')") # Statistika uchun
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('tovarlar_clicks', '0')")
     
     conn.commit()
     conn.close()
@@ -188,9 +191,12 @@ def get_main_menu_keyboard(user_id):
     btn_cart = types.KeyboardButton("🛒 Savat")
     btn_delivery = types.KeyboardButton("🚚 Yetkazib berish")
     btn_about = types.KeyboardButton("ℹ️ Biz haqimizda")
+    btn_loc = types.KeyboardButton("📍 Do'kon lokatsiyasi")
+    btn_manual = types.KeyboardButton("📖 Botdan foydalanish")
     
     markup.add(btn_products, btn_cart)
     markup.add(btn_delivery, btn_about)
+    markup.add(btn_loc, btn_manual)
     
     if user_id == MASTER_ADMIN_ID:
         markup.add(types.KeyboardButton("🛠 Admin Panel"))
@@ -200,11 +206,14 @@ def get_admin_main_inline():
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
         types.InlineKeyboardButton("➕ Yangi Tovar Qo'shish", callback_data="adm_add_product"),
-        types.InlineKeyboardButton("➖ Tovarni O'chirish", callback_data="adm_del_product"),
+        types.InlineKeyboardButton("📝 Tovarni Taxrirlash", callback_data="adm_edit_product_menu"),
+        types.InlineKeyboardButton("❌ Tovar / Guruxni O'chirish", callback_data="adm_del_menu"),
+        types.InlineKeyboardButton("📍 Do'kon Lokatsiyasini O'rnatish", callback_data="adm_set_loc"),
+        types.InlineKeyboardButton("📖 Qo'llanma (Video) Yuklash", callback_data="adm_set_manual"),
         types.InlineKeyboardButton("🔑 Yangi Promokod Yaratish", callback_data="adm_add_promo"),
         types.InlineKeyboardButton("📊 Bot Statistikasi", callback_data="adm_stats"),
         types.InlineKeyboardButton("📢 Barchaga Xabar Yuborish", callback_data="adm_broadcast"),
-        types.InlineKeyboardButton("🏆 Top Xaridorlar Reytingi", callback_data="adm_top_buyers") # YANGI ZO'R FUNKSIYA
+        types.InlineKeyboardButton("🏆 Top Xaridorlar Reytingi", callback_data="adm_top_buyers")
     )
     return markup
 
@@ -229,6 +238,18 @@ def handle_start(message):
             f"👇 Kerakli bo'limni tanlang:")
     bot.send_message(message.chat.id, text, reply_markup=get_main_menu_keyboard(message.from_user.id), parse_mode="Markdown")
 
+# YANGI: JONLI LOKATSIYANI QABUL QILISH VA ADMINLARGA FORWARD QILISH
+@bot.message_handler(content_types=['location'])
+def handle_location(message):
+    if message.chat.id != MASTER_ADMIN_ID:
+        for admin in ORDER_ADMINS:
+            try:
+                bot.send_message(admin, f"🔔 **Xaridordan joylashuv (Lokatsiya) keldi!**\n👤 Mijoz: {message.from_user.first_name}\n🆔 ID: `{message.chat.id}`", parse_mode="Markdown")
+                bot.forward_message(admin, message.chat.id, message.message_id)
+            except:
+                pass
+        bot.reply_to(message, "✅ Joylashuvingiz qabul qilindi va bot ma'muriyatiga muvaffaqiyatli yuborildi. Tez orada siz bilan bog'lanamiz!")
+
 @bot.message_handler(func=lambda msg: True)
 def handle_text_messages(message):
     user_id = message.from_user.id
@@ -238,7 +259,6 @@ def handle_text_messages(message):
     if text == "TOVARLAR 🌐":
         conn = get_db_connection()
         cursor = conn.cursor()
-        # Statistikani yangilash
         cursor.execute("UPDATE settings SET value = CAST(value AS INTEGER) + 1 WHERE key = 'tovarlar_clicks'")
         conn.commit()
         
@@ -323,12 +343,32 @@ def handle_text_messages(message):
         cursor.execute("SELECT value FROM settings WHERE key = 'about_text'")
         bot.send_message(message.chat.id, cursor.fetchone()['value'])
         conn.close()
+        
+    elif text == "📍 Do'kon lokatsiyasi":
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        loc = cursor.execute("SELECT latitude, longitude FROM shop_location").fetchone()
+        conn.close()
+        if loc:
+            bot.send_message(message.chat.id, "📍 **Bizning do'konimiz xaritadagi joylashuvi:**", parse_mode="Markdown")
+            bot.send_location(message.chat.id, loc['latitude'], loc['longitude'])
+        else:
+            bot.send_message(message.chat.id, "🚫 Do'kon lokatsiyasi hozircha kiritilmagan.")
+
+    elif text == "📖 Botdan foydalanish":
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        data = cursor.execute("SELECT file_id, caption FROM manual").fetchone()
+        conn.close()
+        if data:
+            bot.send_video(message.chat.id, data['file_id'], caption=data['caption'], parse_mode="Markdown")
+        else:
+            bot.send_message(message.chat.id, "📖 Hozircha qo'llanma yuklanmagan.")
 
     elif text == "🛠 Admin Panel" and user_id == MASTER_ADMIN_ID:
         bot.send_message(message.chat.id, "🛠 **Admin Paneliga xush kelibsiz!**", reply_markup=get_admin_main_inline(), parse_mode="Markdown")
 
     else:
-        # YANGILANGAN PROMOKOD TIZIMI (LIMIT VA 1 MARTA OLISH)
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT reward_text, usage_count, max_uses FROM promocodes WHERE code = ?", (text.upper(),))
@@ -338,12 +378,10 @@ def handle_text_messages(message):
             if promo['usage_count'] >= promo['max_uses']:
                 bot.send_message(message.chat.id, "❌ **Bu promokod ishlatib bo'lingan!** (Limit tugagan)", parse_mode="Markdown")
             else:
-                # Odam avval olgan yoki yo'qligini tekshirish
                 cursor.execute("SELECT * FROM used_promocodes WHERE user_id = ? AND code = ?", (user_id, text.upper()))
                 if cursor.fetchone():
                     bot.send_message(message.chat.id, "❌ **Siz bu promokoddan avval foydalangansiz!**", parse_mode="Markdown")
                 else:
-                    # Muvaffaqiyatli foydalanish
                     cursor.execute("INSERT INTO used_promocodes (user_id, code) VALUES (?, ?)", (user_id, text.upper()))
                     cursor.execute("UPDATE promocodes SET usage_count = usage_count + 1 WHERE code = ?", (text.upper(),))
                     conn.commit()
@@ -357,7 +395,7 @@ def handle_text_messages(message):
         conn.close()
 
 # =====================================================================
-# 6. INLINE CALLBACK HANDLERS (VA YANGI FUNKSIYALAR)
+# 6. INLINE CALLBACK HANDLERS
 # =====================================================================
 
 @bot.callback_query_handler(func=lambda call: True)
@@ -373,23 +411,128 @@ def handle_callbacks(call):
 
     # ------------------ YANGI ADMIN PANEL FUNKSIYALARI ------------------
     
-    # 📊 BOT STATISTIKASI
-    if data == "adm_stats" and user_id == MASTER_ADMIN_ID:
+    # DO'KON LOKATSIYASINI O'RNATISH
+    if data == "adm_set_loc" and user_id == MASTER_ADMIN_ID:
+        msg = bot.send_message(chat_id, "📍 Iltimos, do'kon joylashuvini (Location) Telegram xaritasi orqali yuboring:")
+        bot.register_next_step_handler(msg, step_save_loc)
+        bot.answer_callback_query(call.id)
+
+    # VIDEO QO'LLANMA YUKLASH
+    elif data == "adm_set_manual" and user_id == MASTER_ADMIN_ID:
+        msg = bot.send_message(chat_id, "📹 Video qo'llanmani yuboring va tagiga uning tavsifini yozib qoldiring:")
+        bot.register_next_step_handler(msg, step_save_manual)
+        bot.answer_callback_query(call.id)
+
+    # GURUX / TOVAR O'CHIRISH MENYUSI
+    elif data == "adm_del_menu" and user_id == MASTER_ADMIN_ID:
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("🗑 Tovar O'chirish", callback_data="adm_del_product"),
+            types.InlineKeyboardButton("🗂 Gurux O'chirish", callback_data="adm_del_group_list")
+        )
+        bot.edit_message_text("Nimani o'chirmoqchisiz? Tanlang:", chat_id, msg_id, reply_markup=markup)
+
+    elif data == "adm_del_group_list" and user_id == MASTER_ADMIN_ID:
         conn = get_db_connection()
         cursor = conn.cursor()
+        groups = cursor.execute("SELECT id, name FROM groups").fetchall()
+        conn.close()
         
-        # 1. Umumiy obunachilar
+        if not groups:
+            bot.answer_callback_query(call.id, "O'chirish uchun guruxlar mavjud emas!", show_alert=True)
+            return
+            
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        for g in groups:
+            markup.add(types.InlineKeyboardButton(f"📁 {g['name']}", callback_data=f"delg_{g['id']}"))
+        markup.add(types.InlineKeyboardButton("🔙 Orqaga", callback_data="adm_del_menu"))
+        bot.edit_message_text("O'chirmoqchi bo'lgan guruxni tanlang (DIQQAT: Gurux ichidagi tovarlar ham o'chib ketadi!):", chat_id, msg_id, reply_markup=markup)
+
+    elif data.startswith("delg_") and user_id == MASTER_ADMIN_ID:
+        g_id = int(data.split("_")[1])
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        groups = cursor.execute("SELECT id, name FROM groups").fetchall()
+        conn.close()
+        
+        if not groups:
+            bot.answer_callback_query(call.id, "O'chirish uchun guruxlar mavjud emas!", show_alert=True)
+            return
+            
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        for g in groups:
+            markup.add(types.InlineKeyboardButton(f"📁 {g['name']}", callback_data=f"delg_{g['id']}"))
+        markup.add(types.InlineKeyboardButton("🔙 Orqaga", callback_data="adm_del_menu"))
+        bot.edit_message_text("O'chirmoqchi bo'lgan guruxni tanlang (DIQQAT: Gurux ichidagi tovarlar ham o'chib ketadi!):", chat_id, msg_id, reply_markup=markup)
+
+    elif data.startswith("delg_") and user_id == MASTER_ADMIN_ID:
+        g_id = int(data.split("_")[1])
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM groups WHERE id = ?", (g_id,))
+        cursor.execute("DELETE FROM products WHERE group_id = ?", (g_id,))
+        conn.commit()
+        conn.close()
+        bot.answer_callback_query(call.id, "✅ Gurux va unga tegishli tovarlar o'chirildi!", show_alert=True)
+        bot.edit_message_text("Gurux muvaffaqiyatli tozalandi.", chat_id, msg_id)
+
+    # TOVARNI TAXRIRLASH
+    elif data == "adm_edit_product_menu" and user_id == MASTER_ADMIN_ID:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        products = cursor.execute("SELECT id, name FROM products").fetchall()
+        conn.close()
+        
+        if not products:
+            bot.answer_callback_query(call.id, "Bazada taxrirlash uchun mahsulot topilmadi!", show_alert=True)
+            return
+
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        for prod in products:
+            markup.add(types.InlineKeyboardButton(f"✏️ {prod['name']}", callback_data=f"p_edit_{prod['id']}"))
+        
+        bot.edit_message_text("Qaysi tovarni taxrirlamoqchisiz? Tanlang:", chat_id, msg_id, reply_markup=markup)
+
+    elif data.startswith("p_edit_") and user_id == MASTER_ADMIN_ID:
+        prod_id = int(data.split("_")[2])
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(
+            types.InlineKeyboardButton("💰 Narxini o'zgartirish", callback_data=f"ch_price_{prod_id}"),
+            types.InlineKeyboardButton("🖼 Rasmini o'zgartirish", callback_data=f"ch_photo_{prod_id}"),
+            types.InlineKeyboardButton("📝 Sifatini (Tavsifini) o'zgartirish", callback_data=f"ch_desc_{prod_id}"),
+            types.InlineKeyboardButton("🔙 Orqaga", callback_data="adm_edit_product_menu")
+        )
+        bot.edit_message_text("Ushbu tovarning qaysi qismini o'zgartiramiz?", chat_id, msg_id, reply_markup=markup)
+
+    # Taxrirlash zanjirlari qabuli:
+    elif data.startswith("ch_price_") and user_id == MASTER_ADMIN_ID:
+        p_id = int(data.split("_")[2])
+        msg = bot.send_message(chat_id, "💰 Yangi narxni kiriting (Faqat raqam):")
+        bot.register_next_step_handler(msg, step_edit_price, p_id)
+        bot.answer_callback_query(call.id)
+
+    elif data.startswith("ch_photo_") and user_id == MASTER_ADMIN_ID:
+        p_id = int(data.split("_")[2])
+        msg = bot.send_message(chat_id, "🖼 Tovar uchun yangi rasmni yuboring:")
+        bot.register_next_step_handler(msg, step_edit_photo, p_id)
+        bot.answer_callback_query(call.id)
+
+    elif data.startswith("ch_desc_") and user_id == MASTER_ADMIN_ID:
+        p_id = int(data.split("_")[2])
+        msg = bot.send_message(chat_id, "📝 Tovar uchun yangi sifat/tavsif matnini kiriting:")
+        bot.register_next_step_handler(msg, step_edit_desc, p_id)
+        bot.answer_callback_query(call.id)
+
+    # 📊 BOT STATISTIKASI
+    elif data == "adm_stats" and user_id == MASTER_ADMIN_ID:
+        conn = get_db_connection()
+        cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM users")
         total_users = cursor.fetchone()[0]
-        
-        # 2. Tovarlar bo'limiga necha marta kirildi
         cursor.execute("SELECT value FROM settings WHERE key = 'tovarlar_clicks'")
         tovarlar_clicks = cursor.fetchone()[0]
-        
-        # 3. Necha kishi haqiqiy xarid qildi (Buyurtmasi qabul qilinganlar)
         cursor.execute("SELECT COUNT(DISTINCT user_id) FROM orders WHERE status = 'accepted'")
         real_buyers = cursor.fetchone()[0]
-        
         conn.close()
         
         stats_msg = (
@@ -401,25 +544,20 @@ def handle_callbacks(call):
         bot.send_message(chat_id, stats_msg, parse_mode="Markdown")
         bot.answer_callback_query(call.id)
 
-    # 📢 BARCHAGA XABAR YUBORISH (RASM YOKI MATN)
+    # 📢 BARCHAGA XABAR YUBORISH
     elif data == "adm_broadcast" and user_id == MASTER_ADMIN_ID:
         msg = bot.send_message(chat_id, "📢 **Barchaga yuborish uchun xabar yoki rasm yuboring:**\n\n_(Agar rasm yuborsangiz, tagiga yozgan ma'lumotingiz qo'shib yuboriladi)_", parse_mode="Markdown")
         bot.register_next_step_handler(msg, step_broadcast_receive)
         bot.answer_callback_query(call.id)
 
-    # 🏆 TOP XARIDORLAR (YANGI ZO'R FUNKSIYA)
+    # 🏆 TOP XARIDORLAR
     elif data == "adm_top_buyers" and user_id == MASTER_ADMIN_ID:
         conn = get_db_connection()
         cursor = conn.cursor()
-        # Eng ko'p xarid qilingan buyurtmalar summasini hisoblash
         query = """
             SELECT u.first_name, u.username, SUM(o.total_price) as total_spent 
-            FROM orders o 
-            JOIN users u ON o.user_id = u.user_id 
-            WHERE o.status = 'accepted' 
-            GROUP BY o.user_id 
-            ORDER BY total_spent DESC 
-            LIMIT 5
+            FROM orders o JOIN users u ON o.user_id = u.user_id 
+            WHERE o.status = 'accepted' GROUP BY o.user_id ORDER BY total_spent DESC LIMIT 5
         """
         cursor.execute(query)
         top_buyers = cursor.fetchall()
@@ -603,8 +741,8 @@ def handle_callbacks(call):
         
         if action == "accept":
             client_msg = ("✅ **Buyurtmangiz qabul qilindi!**\n\n"
-                          "📍 Agar jonli joylashuvni (Live Location) ulashishni bilsangiz shu yerga yuboring, "
-                          "bo'lmasam adminlarga murojaat qiling va manzilingizni tushuntiring:")
+                          "📍 Jonli joylashuvingizni (Live Location) pastdagi qisqich tugmasi orqali yuborishingiz mumkin. "
+                          "Bu buyurtmani tez va aniq yetkazib berishga yordam beradi!")
             bot.edit_message_text(call.message.text + "\n\n**HOLATI: ✅ QABUL QILINDI**", chat_id, msg_id)
         else:
             client_msg = ("❌ **Kechirasiz, buyurtmangiz rad etildi.**\n\n"
@@ -617,9 +755,7 @@ def handle_callbacks(call):
         except Exception:
             bot.answer_callback_query(call.id, "Xaridor botni bloklagan bo'lishi mumkin.")
 
-    # =====================================================================
     # TOVAR QO'SHISH VA ADMINLIK
-    # =====================================================================
     elif data == "adm_add_product" and user_id == MASTER_ADMIN_ID:
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("📁 Mavjud guruh ichiga", callback_data="adm_exist_g"),
@@ -672,7 +808,8 @@ def handle_callbacks(call):
         markup = types.InlineKeyboardMarkup(row_width=1)
         for prod in products:
             markup.add(types.InlineKeyboardButton(f"❌ {prod['name']}", callback_data=f"del_{prod['id']}"))
-        bot.send_message(chat_id, "O'chirmoqchi bo'lgan tovaringiz ustiga bosing:", reply_markup=markup)
+        markup.add(types.InlineKeyboardButton("🔙 Orqaga", callback_data="adm_del_menu"))
+        bot.edit_message_text("O'chirmoqchi bo'lgan tovaringiz ustiga bosing:", chat_id, msg_id, reply_markup=markup)
         bot.answer_callback_query(call.id)
         
     elif data.startswith("del_") and user_id == MASTER_ADMIN_ID:
@@ -682,7 +819,7 @@ def handle_callbacks(call):
         cursor.execute("DELETE FROM products WHERE id = ?", (prod_id,))
         conn.commit()
         conn.close()
-        bot.answer_callback_query(call.id, "Tovar muvaffaqiyatli o'chirildi!")
+        bot.answer_callback_query(call.id, "✅ Tovar muvaffaqiyatli o'chirildi!")
         bot.edit_message_text("Tovar o'chirildi. Admin panel orqali ishlashda davom etishingiz mumkin.", chat_id, msg_id)
 
     elif data == "adm_add_promo" and user_id == MASTER_ADMIN_ID:
@@ -694,7 +831,7 @@ def handle_callbacks(call):
 # 7. MAHSUS FUNKSIYA: FOYDALANUVCHI KLAVIATURADAN YOZIB XARID QILISHI
 # =====================================================================
 def process_direct_quantity_input(message, p_id):
-    if message.text in ["TOVARLAR 🌐", "🛒 Savat", "🚚 Yetkazib berish", "ℹ️ Biz haqimizda", "🛠 Admin Panel"]:
+    if message.text in ["TOVARLAR 🌐", "🛒 Savat", "🚚 Yetkazib berish", "ℹ️ Biz haqimizda", "📍 Do'kon lokatsiyasi", "📖 Botdan foydalanish", "🛠 Admin Panel"]:
         handle_text_messages(message)
         return
 
@@ -739,8 +876,71 @@ def process_direct_quantity_input(message, p_id):
         bot.send_message(message.chat.id, "❌ Noto'g'ri yozdingiz. Iltimos faqat raqam (Masalan: `1` yoki `14kg`) deb yozing. Qayta urinib ko'rish uchun tovarlar bo'limiga kiring.", parse_mode="Markdown")
 
 # =====================================================================
-# 8. ADMIN NEXT STEP ZANJIRLARI
+# 8. ADMIN NEXT STEP ZANJIRLARI (YANGI VA ESKI)
 # =====================================================================
+
+# LOKATSIYA SAQLASH
+def step_save_loc(message):
+    if message.location:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM shop_location")
+        cursor.execute("INSERT INTO shop_location (latitude, longitude) VALUES (?, ?)", (message.location.latitude, message.location.longitude))
+        conn.commit()
+        conn.close()
+        bot.send_message(message.chat.id, "✅ Do'kon xaritasi muvaffaqiyatli o'rnatildi!")
+    else:
+        bot.send_message(message.chat.id, "❌ Siz xarita (Location) yubormadingiz. Amaliyot bekor qilindi.")
+
+# QO'LLANMA SAQLASH
+def step_save_manual(message):
+    if message.video:
+        file_id = message.video.file_id
+        caption = message.caption if message.caption else "Bu botdan qanday foydalanish bo'yicha video-qo'llanma."
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM manual")
+        cursor.execute("INSERT INTO manual (file_id, caption) VALUES (?, ?)", (file_id, caption))
+        conn.commit()
+        conn.close()
+        bot.send_message(message.chat.id, "✅ Video qo'llanma va uning tavsifi muvaffaqiyatli saqlandi!")
+    else:
+        bot.send_message(message.chat.id, "❌ Siz video yubormadingiz. Amaliyot bekor qilindi.")
+
+# TOVARNI TAXRIRLASH (Narx)
+def step_edit_price(message, p_id):
+    try:
+        new_price = float(message.text)
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE products SET price = ? WHERE id = ?", (new_price, p_id))
+        conn.commit()
+        conn.close()
+        bot.send_message(message.chat.id, "✅ Tovar narxi muvaffaqiyatli yangilandi!")
+    except:
+        bot.send_message(message.chat.id, "❌ Xatolik! Narx faqat raqamlardan iborat bo'lishi shart.")
+
+# TOVARNI TAXRIRLASH (Rasm)
+def step_edit_photo(message, p_id):
+    if message.photo:
+        file_id = message.photo[-1].file_id
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE products SET photo_id = ? WHERE id = ?", (file_id, p_id))
+        conn.commit()
+        conn.close()
+        bot.send_message(message.chat.id, "✅ Tovar rasmi muvaffaqiyatli yangilandi!")
+    else:
+        bot.send_message(message.chat.id, "❌ Rasm yuborilmadi.")
+
+# TOVARNI TAXRIRLASH (Sifat/Tavsif)
+def step_edit_desc(message, p_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE products SET description = ? WHERE id = ?", (message.text, p_id))
+    conn.commit()
+    conn.close()
+    bot.send_message(message.chat.id, "✅ Tovarning sifati va tavsifi yangilandi!")
 
 def step_broadcast_receive(message):
     if message.from_user.id != MASTER_ADMIN_ID: return
@@ -755,14 +955,12 @@ def step_broadcast_receive(message):
     for u in users:
         try:
             if message.photo:
-                # Agar rasm yuborilsa
                 bot.send_photo(u['user_id'], message.photo[-1].file_id, caption=message.caption, parse_mode="Markdown")
             else:
-                # Agar oddiy matn yuborilsa
                 bot.send_message(u['user_id'], message.text, parse_mode="Markdown")
             success += 1
         except Exception:
-            pass # Foydalanuvchi botni bloklagan bo'lsa o'tib ketadi
+            pass
             
     bot.send_message(MASTER_ADMIN_ID, f"✅ **Muvaffaqiyatli!**\nXabaringiz {success} ta foydalanuvchiga yetkazildi.", parse_mode="Markdown")
 
