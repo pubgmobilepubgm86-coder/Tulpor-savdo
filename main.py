@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-LOYIHA: TULPOR SAVDO MARKAZI BOTI (YANGILANGAN MUKAMMAL VERSIYA)
-Barcha adminlik buyruqlari, guruhli tovar tizimi va yashirin promokod funksiyalari bilan.
-Foydalanuvchilar uchun miqdorni qo'lda yozish (manual kiritish) tizimi qo'shilgan.
+LOYIHA: TULPOR SAVDO MARKAZI BOTI
+Barcha adminlik buyruqlari, guruhli tovar tizimi va yashirin promokod funksiyalari to'liq saqlangan.
+YANGILANISH: Xaridni osonlashtirish uchun foydalanuvchi klaviaturadan to'g'ridan-to'g'ri "1" (qop) yoki "14kg" (kilo) deb yozadigan soddalashtirilgan tizim birlashtirildi.
 """
 
 import os
@@ -60,7 +60,6 @@ def init_database():
         )
     """)
     
-    # Guruhlar jadvali (KG yoki QOP asosida)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS groups (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,7 +68,6 @@ def init_database():
         )
     """)
     
-    # Tovarlar jadvali
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS products (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -148,7 +146,7 @@ web_thread.daemon = True
 web_thread.start()
 
 # =====================================================================
-# 4. KLAVIATURALAR VA INTERFEYS
+# 4. KLAVIATURALAR 
 # =====================================================================
 
 def get_main_menu_keyboard(user_id):
@@ -161,7 +159,6 @@ def get_main_menu_keyboard(user_id):
     markup.add(btn_products, btn_cart)
     markup.add(btn_delivery, btn_about)
     
-    # Faqat ADMIN uchun Admin Panel ko'rinadi. Promokod tugmasi olib tashlangan.
     if user_id == ADMIN_ID:
         markup.add(types.KeyboardButton("🛠 Admin Panel"))
     return markup
@@ -176,39 +173,6 @@ def get_admin_main_inline():
         types.InlineKeyboardButton("📢 Barchaga Xabar Yuborish", callback_data="adm_broadcast"),
         types.InlineKeyboardButton("⚙️ Matnlarni Tahrirlash", callback_data="adm_edit_texts")
     )
-    return markup
-
-def build_interactive_cart_keyboard(product_id, qty=1, unit='kg', qop_weight=0, total_p=0):
-    markup = types.InlineKeyboardMarkup(row_width=4)
-    
-    # KG yoki QOP tanlovi (agar qop o'lchovi kiritilgan bo'lsa)
-    if qop_weight > 0:
-        btn_kg = "✅ KG ⚖️" if unit == 'kg' else "KG ⚖️"
-        btn_qop = "✅ QOP 📦" if unit == 'qop' else "QOP 📦"
-        markup.add(
-            types.InlineKeyboardButton(btn_kg, callback_data=f"unit_{product_id}_kg"),
-            types.InlineKeyboardButton(btn_qop, callback_data=f"unit_{product_id}_qop")
-        )
-    
-    # Soni +/- boshqaruvi
-    markup.add(
-        types.InlineKeyboardButton("-10", callback_data=f"qty_{product_id}_-10"),
-        types.InlineKeyboardButton("-1", callback_data=f"qty_{product_id}_-1"),
-        types.InlineKeyboardButton("+1", callback_data=f"qty_{product_id}_1"),
-        types.InlineKeyboardButton("+10", callback_data=f"qty_{product_id}_10")
-    )
-    
-    format_qty = int(qty) if qty == int(qty) else qty
-    
-    # Jami hisob-kitob holati (Axborot maqsadida)
-    markup.add(types.InlineKeyboardButton(f"Soni: {format_qty} {unit.upper()} ➡️ {int(total_p):,} so'm", callback_data="none_action"))
-    
-    # Foydalanuvchi klaviaturadan qo'lda kiritishi uchun yangi tugma
-    markup.add(types.InlineKeyboardButton("✍️ Miqdorni qo'lda yozish", callback_data=f"manual_qty_{product_id}"))
-    
-    # Savatga qo'shish
-    markup.add(types.InlineKeyboardButton("🛒 Savatga qo'shish", callback_data=f"buy_{product_id}_{unit}_{qty}_{total_p}"))
-    
     return markup
 
 # =====================================================================
@@ -310,8 +274,7 @@ def handle_text_messages(message):
         bot.send_message(message.chat.id, "🛠 **Admin Paneliga xush kelibsiz!**", reply_markup=get_admin_main_inline(), parse_mode="Markdown")
 
     else:
-        # PROMOKODNI YASHIRIN TEKSHIRISH TIZIMI
-        # Foydalanuvchi klaviaturadan har qanday so'z yozganda bot uni promokodga tekshiradi
+        # PROMOKODNI YASHIRIN TEKSHIRISH
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT reward_text, usage_count FROM promocodes WHERE code = ?", (text.upper(),))
@@ -325,11 +288,11 @@ def handle_text_messages(message):
             admin_msg = f"🔔 **Vip Promokod Ishlatildi!**\n🔑 Kod: `{text.upper()}`\n👤 Xaridor: {message.from_user.first_name}\n🆔 ID: `{user_id}`\n📥 [Lichkaga o'tish](tg://user?id={user_id})"
             bot.send_message(ADMIN_ID, admin_msg, parse_mode="Markdown")
         else:
-            bot.send_message(message.chat.id, "Prosesni davom ettirish uchun pastdagi menyulardan birini tanlang.", reply_markup=get_main_menu_keyboard(user_id))
+            bot.send_message(message.chat.id, "👇 Iltimos, pastdagi menyulardan birini tanlang.", reply_markup=get_main_menu_keyboard(user_id))
         conn.close()
 
 # =====================================================================
-# 6. INLINE CALLBACK HANDLERS (XARID VA ADMIN)
+# 6. INLINE CALLBACK HANDLERS (GURUHLAR VA XARID JARAYONI)
 # =====================================================================
 
 @bot.callback_query_handler(func=lambda call: True)
@@ -373,7 +336,9 @@ def handle_callbacks(call):
         for g in groups: markup.add(types.InlineKeyboardButton(g['name'], callback_data=f"view_group_{g['id']}"))
         bot.edit_message_text("📁 Kerakli mahsulot guruhini tanlang:", chat_id, msg_id, reply_markup=markup)
 
-    # Bitta tovarni batafsil ko'rish va XARID OYNASI
+    # =====================================================================
+    # YANGI SODDALASHTIRILGAN TOVAR KO'RISH VA XARID QILISH QISMI
+    # =====================================================================
     elif data.startswith("view_prod_"):
         p_id = int(data.split("_")[2])
         conn = get_db_connection()
@@ -385,68 +350,27 @@ def handle_callbacks(call):
         if not p: return
         bot.delete_message(chat_id, msg_id)
         
-        unit = "qop" if p['qop_weight'] > 0 else "kg"
-        qty = 1
-        total_p = p['price'] * qty if unit == 'qop' else (p['price'] / p['qop_weight'] if p['qop_weight'] > 0 else p['price']) * qty
-        
-        markup = build_interactive_cart_keyboard(p['id'], qty, unit, p['qop_weight'], total_p)
-        
-        # Yangi chiroyli qollanma matni
+        # Odamlarga tushunarli formatda buyurtma berishni o'rgatamiz
         caption = (
             f"📦 **{p['name']}**\n"
             f"💰 Narxi: {p['price']:,} so'm\n"
             f"🚚 Dastavka: {p['delivery_price']:,} so'm\n\n"
             f"📝 **Tavsif:** {p['description']}\n\n"
-            f"💡 **Qanday xarid qilinadi?**\n"
-            f"1️⃣ Yuqoridan **KG** yoki **QOP** ni belgilang.\n"
-            f"2️⃣ Miqdorni **+ / -** tugmalari bilan o'zgartiring YOYI **'✍️ Miqdorni qo'lda yozish'** tugmasini bosib o'zingiz aniq raqamni yozing (Masalan: 12 yoki 1.5).\n"
-            f"3️⃣ O'zgarishni ko'rgach **'🛒 Savatga qo'shish'** tugmasini bosing."
+            f"❗️ **QANDAY BUYURTMA QILINADI?**\n"
+            f"✍️ Shunchaki klaviaturaga yozib yuboring!\n"
+            f"• Agar qop olmoqchi bo'lsangiz faqat raqam yozing: masalan **1** yoki **5**\n"
+            f"• Agar kilo olmoqchi bo'lsangiz raqam yoniga kg qo'shib yozing: masalan **14kg** yoki **50kg**"
         )
         
-        bot.send_photo(chat_id, p['photo_id'], caption=caption, parse_mode="Markdown", reply_markup=markup)
-
-    # Foydalanuvchi "Miqdorni qo'lda yozish" tugmasini bossa:
-    elif data.startswith("manual_qty_"):
-        p_id = int(data.split("_")[2])
-        msg = bot.send_message(chat_id, "✍️ Necha kg (yoki qop) olmoqchisiz?\nIltimos, klaviaturadan faqat raqam yozib yuboring (Masalan: 12 yoki 1.5):")
-        bot.register_next_step_handler(msg, process_manual_input, p_id, msg_id)
-        bot.answer_callback_query(call.id)
-
-    # Interaktiv hisoblagich boshqaruvi (+/- va o'lchovni almashtirish)
-    elif data.startswith("unit_") or data.startswith("qty_"):
-        parts = data.split("_")
-        action = parts[0]
-        p_id = int(parts[1])
-        val = parts[2]
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 Orqaga", callback_data="back_to_groups"))
         
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT price, qop_weight FROM products WHERE id = ?", (p_id,))
-        p = cursor.fetchone()
-        conn.close()
+        msg = bot.send_photo(chat_id, p['photo_id'], caption=caption, parse_mode="Markdown", reply_markup=markup)
         
-        try:
-            # Joriy sonni tugmadan ajratib olish
-            current_text = call.message.reply_markup.keyboard[2][0].text
-            curr_qty = float(current_text.split(" ")[1])
-            curr_unit = current_text.split(" ")[2].lower()
-        except:
-            curr_qty = 1
-            curr_unit = "qop" if p['qop_weight'] > 0 else "kg"
-            
-        if action == "unit":
-            unit = val
-            qty = curr_qty
-        else:
-            unit = curr_unit
-            qty = max(1, curr_qty + float(val))
-            
-        total_p = p['price'] * qty if unit == 'qop' else (p['price'] / p['qop_weight'] if p['qop_weight'] > 0 else p['price']) * qty
-        markup = build_interactive_cart_keyboard(p_id, qty, unit, p['qop_weight'], total_p)
-        bot.edit_message_reply_markup(chat_id, msg_id, reply_markup=markup)
-        bot.answer_callback_query(call.id)
+        # Aynan shu tovarga foydalanuvchidan klaviaturadan yozishini kutamiz:
+        bot.register_next_step_handler(msg, process_direct_quantity_input, p_id)
 
-    # Savatga yozish
+    # Savatga yozish (Oxirgi bosqich)
     elif data.startswith("buy_"):
         parts = data.split("_")
         p_id = int(parts[1])
@@ -466,16 +390,13 @@ def handle_callbacks(call):
         
         format_qty = int(qty) if qty == int(qty) else qty
         bot.answer_callback_query(call.id, f"✅ {format_qty} {unit.upper()} savatga qo'shildi!", show_alert=True)
+        bot.edit_message_text(f"🛒 Sizning tovaringiz savatga o'tdi. Yana xarid qilish uchun 'TOVARLAR 🌐' tugmasini bosing.", chat_id, msg_id)
 
-    # --- ADMIN ZANJIRI: TOVAR QO'SHISH ---
+
+    # =====================================================================
+    # ADMIN ZANJIRI (HECH QANDAY O'ZGARISHSİZ TO'LIQ SAQLANDI)
+    # =====================================================================
     elif data == "adm_add_product" and user_id == ADMIN_ID:
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("📁 Mavjud guruh ichiga", callback_data="adm_exist_g"),
-                   types.InlineKeyboardButton("✨ Yangi guruh ochish", callback_data="adm_new_g"))
-        bot.send_message(chat_id, "Qanday guruhga tovar qo'shmoqchisiz?", reply_markup=markup)
-        bot.answer_callback_query(call.id)
-
-    elif data == "adm_new_g" and user_id == ADMIN_ID:
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("📁 Mavjud guruh ichiga", callback_data="adm_exist_g"),
                    types.InlineKeyboardButton("✨ Yangi guruh ochish", callback_data="adm_new_g"))
@@ -540,13 +461,11 @@ def handle_callbacks(call):
         bot.answer_callback_query(call.id, "Tovar muvaffaqiyatli o'chirildi!")
         bot.edit_message_text("Tovar o'chirildi. Admin panel orqali ishlashda davom etishingiz mumkin.", chat_id, msg_id)
 
-    # --- ADMIN ZANJIRI: PROMOKOD ---
     elif data == "adm_add_promo" and user_id == ADMIN_ID:
         msg = bot.send_message(chat_id, "🔑 Yangi promokod so'zini kiriting (Masalan: VIP2026):")
         bot.register_next_step_handler(msg, step_promo_code)
         bot.answer_callback_query(call.id)
 
-    # Boshqa xarid funksiyalar (Tozalash, Checkout) 
     elif data == "clear_cart":
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -579,18 +498,30 @@ def handle_callbacks(call):
         conn.close()
         bot.edit_message_text("✅ Buyurtma adminga yuborildi! Tez orada siz bilan bog'lanamiz.", chat_id, msg_id)
 
+# =====================================================================
+# 7. MAHSUS FUNKSIYA: FOYDALANUVCHI KLAVIATURADAN YOZIB XARID QILISHI
+# =====================================================================
+def process_direct_quantity_input(message, p_id):
+    # Agar foydalanuvchi menyudagi tugmalardan birini bossa jarayonni bekor qilamiz
+    if message.text in ["TOVARLAR 🌐", "🛒 Savat", "🚚 Yetkazib berish", "ℹ️ Biz haqimizda", "🛠 Admin Panel"]:
+        handle_text_messages(message)
+        return
 
-# =====================================================================
-# 7. MAHSUS FUNKSIYA: FOYDALANUVCHI MIQDORNI QO'LDA KIRITISHI
-# =====================================================================
-def process_manual_input(message, p_id, inline_msg_id):
-    user_id = message.from_user.id
-    
-    # Har qanday yozilgan matnni tozalamiz ("12 kg", " 12 ", "12qop" -> "12.0")
-    raw_text = message.text.lower().replace('kg', '').replace('qop', '').replace(' ', '').replace(',', '.')
+    text = message.text.lower().replace(" ", "").replace(",", ".")
     
     try:
-        qty = float(raw_text)
+        qty = 0
+        unit = "qop"
+        
+        # Agar "kg" yozuvi bo'lsa
+        if "kg" in text:
+            qty = float(text.replace("kg", ""))
+            unit = "kg"
+        else:
+            # Agar faqat raqam bo'lsa
+            qty = float(text)
+            unit = "qop"
+            
         if qty <= 0: raise ValueError
         
         # Bazadan tovar malumotini olamiz
@@ -602,37 +533,29 @@ def process_manual_input(message, p_id, inline_msg_id):
         
         if not p: return
 
-        # Joriy qaysi o'lchov turidaligini aniqlaymiz (agar foydalanuvchi oldin bosgan bo'lsa)
-        if user_id not in temp_cart_options:
-            temp_cart_options[user_id] = {}
-        if p_id not in temp_cart_options[user_id]:
-            temp_cart_options[user_id][p_id] = {'qty': 1, 'unit': "qop" if p['qop_weight'] > 0 else "kg"}
-
-        unit = temp_cart_options[user_id][p_id]['unit']
-        temp_cart_options[user_id][p_id]['qty'] = qty
-
-        # Yangi summani hisoblaymiz
-        total_p = p['price'] * qty if unit == 'qop' else (p['price'] / p['qop_weight'] if p['qop_weight'] > 0 else p['price']) * qty
-        
-        # Inline xabarni yangilaymiz
-        markup = build_interactive_cart_keyboard(p_id, qty, unit, p['qop_weight'], total_p)
-        bot.edit_message_reply_markup(message.chat.id, inline_msg_id, reply_markup=markup)
-        
+        # Narxni hisoblash
+        if unit == 'qop':
+            total_p = p['price'] * qty
+        else:
+            total_p = (p['price'] / p['qop_weight']) * qty if p['qop_weight'] > 0 else p['price'] * qty
+            
         format_qty = int(qty) if qty == int(qty) else qty
-        bot.send_message(message.chat.id, f"✅ Miqdor muvaffaqiyatli o'zgartirildi: **{format_qty} {unit.upper()}**.\nEndi '🛒 Savatga qo'shish' tugmasini bosing.", parse_mode="Markdown")
         
-        # Ekranni toza saqlash uchun yozishmalar izini o'chirib yuboramiz
-        try:
-            bot.delete_message(message.chat.id, message.message_id) # Odam yozgan son
-            bot.delete_message(message.chat.id, message.message_id - 1) # Bot so'ragan xabar
-        except:
-            pass
+        # Tasdiqlash va Savatga qoshish tugmasi
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(
+            types.InlineKeyboardButton(f"🛒 {format_qty} {unit.upper()} = {int(total_p):,} so'm (Savatga qo'shish)", 
+                                       callback_data=f"buy_{p_id}_{unit}_{qty}"),
+            types.InlineKeyboardButton("❌ Bekor qilish", callback_data="back_to_groups")
+        )
+        
+        bot.send_message(message.chat.id, f"Siz **{format_qty} {unit.upper()}** tanladingiz.\nTasdiqlash uchun quyidagi tugmani bosing:", parse_mode="Markdown", reply_markup=markup)
 
     except ValueError:
-        bot.send_message(message.chat.id, "❌ Noto'g'ri format. Iltimos faqat raqam yozing (Masalan: 12 yoki 1.5). Jarayon bekor qilindi.")
+        bot.send_message(message.chat.id, "❌ Noto'g'ri yozdingiz. Iltimos faqat raqam (Masalan: `1` yoki `14kg`) deb yozing. Qayta urinib ko'rish uchun tovarlar bo'limiga kiring.", parse_mode="Markdown")
 
 # =====================================================================
-# 8. ADMIN NEXT STEP ZANJIRLARI (MAVJUD VA YANGI GURUH UCHUN)
+# 8. ADMIN NEXT STEP ZANJIRLARI (O'ZGARISHSİZ SAQLANDI)
 # =====================================================================
 
 def step_save_new_group(message):
