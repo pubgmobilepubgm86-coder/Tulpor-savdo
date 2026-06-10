@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 LOYIHA: TULPOR SAVDO MARKAZI BOTI
-Barcha adminlik buyruqlari, guruhli tovar tizimi va yashirin promokod funksiyalari to'liq saqlangan.
-YANGILANISH: Xaridni osonlashtirish uchun foydalanuvchi klaviaturadan to'g'ridan-to'g'ri "1" (qop) yoki "14kg" (kilo) deb yozadigan soddalashtirilgan tizim birlashtirildi.
+YANGILANISH: Buyurtmani qabul qilish, 2 ta admin tizimi, jonli joylashuv so'rash va "Yetkazib berish" menyusida faol buyurtmalarni ko'rsatish funksiyasi qo'shildi. Avvalgi hech qanday kod o'chirilmadi.
 """
 
 import os
@@ -21,7 +20,14 @@ from telebot import types
 # =====================================================================
 
 TOKEN = "8849139822:AAHA_XcRp_9eBsatrAIM4KqjiMUEoBbqNQ4"
-ADMIN_ID = 8086545587  # Faqat shu ID egasi Admin Panelni ko'radi
+
+# Admin paneli (tovar qo'shish/o'chirish) faqat asosiy adminga ko'rinadi
+MASTER_ADMIN_ID = 8086545587  
+
+# Buyurtma qabul qiluvchi adminlar ro'yxati (Buyurtmalar ikkalasiga ham boradi)
+ORDER_ADMIN_1 = 5829527078
+ORDER_ADMIN_2 = 8086545587
+ORDER_ADMINS = [ORDER_ADMIN_1, ORDER_ADMIN_2]
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger(__name__)
@@ -107,10 +113,17 @@ def init_database():
             user_id INTEGER NOT NULL,
             items_json TEXT NOT NULL,
             total_price REAL NOT NULL,
-            ordered_at TEXT
+            ordered_at TEXT,
+            status TEXT DEFAULT 'pending'
         )
     """)
     
+    # Mavjud bazani yangilash (agar status kolonkasi yo'q bo'lsa, xatolik bermay qo'shadi)
+    try:
+        cursor.execute("ALTER TABLE orders ADD COLUMN status TEXT DEFAULT 'pending'")
+    except sqlite3.OperationalError:
+        pass # Kolonka allaqachon mavjud
+        
     cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('about_text', '🐎 Tulpor savdo markazi - Biz sizga eng sifatli mahsulotlarni eng hamyonbop narxlarda taqdim etamiz!')")
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('delivery_text', '🚚 Yetkazib berish shartlari:\nNamangan viloyati va Chortoq tumani bo''ylab tezkor hamda xavfsiz yetkazib berish xizmati mavjud.')")
@@ -119,6 +132,18 @@ def init_database():
     conn.close()
 
 init_database()
+
+# =====================================================================
+# YORDAMCHI FUNKSIYALAR
+# =====================================================================
+
+def get_admin_contacts_markup():
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton("👨‍💻 1-Admin bilan bog'lanish", url=f"tg://user?id={ORDER_ADMIN_1}"),
+        types.InlineKeyboardButton("👨‍💻 2-Admin bilan bog'lanish", url=f"tg://user?id={ORDER_ADMIN_2}")
+    )
+    return markup
 
 # =====================================================================
 # 3. RENDER UCHUN VEB-SERVER (24/7 ISHLASH)
@@ -159,7 +184,7 @@ def get_main_menu_keyboard(user_id):
     markup.add(btn_products, btn_cart)
     markup.add(btn_delivery, btn_about)
     
-    if user_id == ADMIN_ID:
+    if user_id == MASTER_ADMIN_ID:
         markup.add(types.KeyboardButton("🛠 Admin Panel"))
     return markup
 
@@ -259,8 +284,27 @@ def handle_text_messages(message):
     elif text == "🚚 Yetkazib berish":
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT value FROM settings WHERE key = 'delivery_text'")
-        bot.send_message(message.chat.id, cursor.fetchone()['value'])
+        # Qabul qilingan faol buyurtmalarni tekshiramiz
+        cursor.execute("SELECT items_json, total_price FROM orders WHERE user_id = ? AND status = 'accepted'", (user_id,))
+        active_orders = cursor.fetchall()
+        
+        if active_orders:
+            res_text = "🚚 **SIZNING FAOL BUYURTMALARingIZ:**\n\n"
+            for idx, order in enumerate(active_orders, 1):
+                items_data = json.loads(order['items_json'])
+                res_text += f"📦 **{idx}-Buyurtmangiz:**\n"
+                for item in items_data:
+                     format_qty = int(item['qty']) if item['qty'] == int(item['qty']) else item['qty']
+                     res_text += f"▪️ {item['name']} - {format_qty} {item['unit'].upper()} = {int(item['cost']):,} so'm\n"
+                res_text += f"💰 **Jami:** {int(order['total_price']):,} so'm\n\n"
+                
+            res_text += "🏃‍♂️ **Holati:** Yetkazib berilyapti\n⏳ **24 soat ichida yetkazib beriladi!**"
+            bot.send_message(message.chat.id, res_text, parse_mode="Markdown")
+        else:
+            # Faol buyurtma bo'lmasa oddiy ma'lumot chiqadi
+            cursor.execute("SELECT value FROM settings WHERE key = 'delivery_text'")
+            bot.send_message(message.chat.id, cursor.fetchone()['value'])
+            
         conn.close()
 
     elif text == "ℹ️ Biz haqimizda":
@@ -270,7 +314,7 @@ def handle_text_messages(message):
         bot.send_message(message.chat.id, cursor.fetchone()['value'])
         conn.close()
 
-    elif text == "🛠 Admin Panel" and user_id == ADMIN_ID:
+    elif text == "🛠 Admin Panel" and user_id == MASTER_ADMIN_ID:
         bot.send_message(message.chat.id, "🛠 **Admin Paneliga xush kelibsiz!**", reply_markup=get_admin_main_inline(), parse_mode="Markdown")
 
     else:
@@ -286,13 +330,13 @@ def handle_text_messages(message):
             bot.send_message(message.chat.id, f"🎁 **Tabriklaymiz! Promokod qabul qilindi!**\n\n{promo['reward_text']}", parse_mode="Markdown")
             
             admin_msg = f"🔔 **Vip Promokod Ishlatildi!**\n🔑 Kod: `{text.upper()}`\n👤 Xaridor: {message.from_user.first_name}\n🆔 ID: `{user_id}`\n📥 [Lichkaga o'tish](tg://user?id={user_id})"
-            bot.send_message(ADMIN_ID, admin_msg, parse_mode="Markdown")
+            bot.send_message(MASTER_ADMIN_ID, admin_msg, parse_mode="Markdown")
         else:
             bot.send_message(message.chat.id, "👇 Iltimos, pastdagi menyulardan birini tanlang.", reply_markup=get_main_menu_keyboard(user_id))
         conn.close()
 
 # =====================================================================
-# 6. INLINE CALLBACK HANDLERS (GURUHLAR VA XARID JARAYONI)
+# 6. INLINE CALLBACK HANDLERS
 # =====================================================================
 
 @bot.callback_query_handler(func=lambda call: True)
@@ -336,9 +380,6 @@ def handle_callbacks(call):
         for g in groups: markup.add(types.InlineKeyboardButton(g['name'], callback_data=f"view_group_{g['id']}"))
         bot.edit_message_text("📁 Kerakli mahsulot guruhini tanlang:", chat_id, msg_id, reply_markup=markup)
 
-    # =====================================================================
-    # YANGI SODDALASHTIRILGAN TOVAR KO'RISH VA XARID QILISH QISMI
-    # =====================================================================
     elif data.startswith("view_prod_"):
         p_id = int(data.split("_")[2])
         conn = get_db_connection()
@@ -350,7 +391,6 @@ def handle_callbacks(call):
         if not p: return
         bot.delete_message(chat_id, msg_id)
         
-        # Odamlarga tushunarli formatda buyurtma berishni o'rgatamiz
         caption = (
             f"📦 **{p['name']}**\n"
             f"💰 Narxi: {p['price']:,} so'm\n"
@@ -366,11 +406,8 @@ def handle_callbacks(call):
         markup.add(types.InlineKeyboardButton("🔙 Orqaga", callback_data="back_to_groups"))
         
         msg = bot.send_photo(chat_id, p['photo_id'], caption=caption, parse_mode="Markdown", reply_markup=markup)
-        
-        # Aynan shu tovarga foydalanuvchidan klaviaturadan yozishini kutamiz:
         bot.register_next_step_handler(msg, process_direct_quantity_input, p_id)
 
-    # Savatga yozish (Oxirgi bosqich)
     elif data.startswith("buy_"):
         parts = data.split("_")
         p_id = int(parts[1])
@@ -392,31 +429,143 @@ def handle_callbacks(call):
         bot.answer_callback_query(call.id, f"✅ {format_qty} {unit.upper()} savatga qo'shildi!", show_alert=True)
         bot.edit_message_text(f"🛒 Sizning tovaringiz savatga o'tdi. Yana xarid qilish uchun 'TOVARLAR 🌐' tugmasini bosing.", chat_id, msg_id)
 
+    elif data == "clear_cart":
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM cart WHERE user_id = ?", (user_id,))
+        conn.commit()
+        conn.close()
+        bot.edit_message_text("Savat tozalandi.", chat_id, msg_id)
 
     # =====================================================================
-    # ADMIN ZANJIRI (HECH QANDAY O'ZGARISHSİZ TO'LIQ SAQLANDI)
+    # BUYURTMA RASMIYLASHTIRISH VA ADMINLARGA YUBORISH
     # =====================================================================
-    elif data == "adm_add_product" and user_id == ADMIN_ID:
+    elif data == "checkout_cart":
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT c.quantity, c.unit, p.name, p.price, p.qop_weight, p.delivery_price FROM cart c JOIN products p ON c.product_id = p.id WHERE c.user_id = ?", (user_id,))
+        items = cursor.fetchall()
+        
+        if not items:
+            bot.answer_callback_query(call.id, "Savat bo'sh!")
+            conn.close()
+            return
+            
+        order_text = f"🔔 **Yangi Buyurtma!**\n👤 Xaridor: {call.from_user.first_name}\n🆔 ID: `{user_id}`\n\n"
+        total = 0
+        total_delivery = 0
+        items_data = [] # Bazaga saqlash uchun JSON
+        
+        for i in items:
+            cost = i['price'] * i['quantity'] if i['unit'] == 'qop' else (i['price']/i['qop_weight'] if i['qop_weight'] > 0 else i['price']) * i['quantity']
+            total += cost
+            total_delivery += i['delivery_price']
+            format_qty = int(i['quantity']) if i['quantity'] == int(i['quantity']) else i['quantity']
+            
+            items_data.append({"name": i['name'], "qty": i['quantity'], "unit": i['unit'], "cost": cost})
+            order_text += f"▪️ {i['name']} - {format_qty} {i['unit'].upper()} = {int(cost):,} so'm\n"
+            
+        total_price_with_del = total + total_delivery
+        order_text += f"\n🚚 Yetkazib berish: {int(total_delivery):,} so'm\n💰 Jami: {int(total_price_with_del):,} so'm\n📞 [Xaridor bilan bog'lanish](tg://user?id={user_id})"
+        
+        # Bazaga buyurtmani "pending" holatida saqlaymiz
+        items_json_str = json.dumps(items_data)
+        cursor.execute("INSERT INTO orders (user_id, items_json, total_price, ordered_at, status) VALUES (?, ?, ?, ?, 'pending')",
+                       (user_id, items_json_str, total_price_with_del, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        order_id = cursor.lastrowid
+        
+        # Savatni tozalash
+        cursor.execute("DELETE FROM cart WHERE user_id = ?", (user_id,))
+        conn.commit()
+        conn.close()
+        
+        # Ikkala adminga xabar va Qabul/Rad tugmalari yuboriladi
+        admin_markup = types.InlineKeyboardMarkup(row_width=2)
+        admin_markup.add(
+            types.InlineKeyboardButton("✅ Qabul qilish", callback_data=f"accept_ord_{order_id}_{user_id}"),
+            types.InlineKeyboardButton("❌ Rad etish", callback_data=f"reject_ord_{order_id}_{user_id}")
+        )
+        
+        for ad_id in ORDER_ADMINS:
+            try:
+                bot.send_message(ad_id, order_text, reply_markup=admin_markup, parse_mode="Markdown")
+            except Exception as e:
+                logger.error(f"Adminga xabar yuborilmadi: {e}")
+
+        # Xaridorga chiqadigan javob
+        bot.delete_message(chat_id, msg_id)
+        msg_text = ("✅ **Sizning so'rovingizni 1 minutdan 1 soat oralig'ida ko'rib chiqamiz va sizga xabar beramiz.**\n\n"
+                    "Savollar bo'yicha quyidagi buyurtma qabul qiluvchilarga yozishingiz mumkin:")
+        bot.send_message(chat_id, msg_text, reply_markup=get_admin_contacts_markup(), parse_mode="Markdown")
+
+    # =====================================================================
+    # ADMIN BUYURTMANI QABUL QILISHI / RAD ETISHI
+    # =====================================================================
+    elif data.startswith("accept_ord_") or data.startswith("reject_ord_"):
+        parts = data.split("_")
+        action = parts[0] # 'accept' yoki 'reject'
+        order_id = int(parts[2])
+        client_id = int(parts[3])
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Buyurtma holatini tekshiramiz (Boshqa admin bosib qo'ygan bo'lmasligi uchun)
+        cursor.execute("SELECT status FROM orders WHERE order_id = ?", (order_id,))
+        order = cursor.fetchone()
+        
+        if order and order['status'] != 'pending':
+            bot.answer_callback_query(call.id, "⚠️ Bu buyurtma allaqachon ko'rib chiqilgan!", show_alert=True)
+            conn.close()
+            return
+
+        # Holatni yangilash
+        new_status = 'accepted' if action == 'accept' else 'rejected'
+        cursor.execute("UPDATE orders SET status = ? WHERE order_id = ?", (new_status, order_id))
+        conn.commit()
+        conn.close()
+        
+        # Xaridorga javob yuborish
+        if action == "accept":
+            client_msg = ("✅ **Buyurtmangiz qabul qilindi!**\n\n"
+                          "📍 Agar jonli joylashuvni (Live Location) ulashishni bilsangiz shu yerga yuboring, "
+                          "bo'lmasam adminlarga murojaat qiling va manzilingizni tushuntiring:")
+            bot.edit_message_text(call.message.text + "\n\n**HOLATI: ✅ QABUL QILINDI**", chat_id, msg_id)
+        else:
+            client_msg = ("❌ **Kechirasiz, buyurtmangiz rad etildi.**\n\n"
+                          "Sababini bilish uchun quyidagi adminlarga murojaat qilishingiz mumkin:")
+            bot.edit_message_text(call.message.text + "\n\n**HOLATI: ❌ RAD ETILDI**", chat_id, msg_id)
+            
+        try:
+            bot.send_message(client_id, client_msg, reply_markup=get_admin_contacts_markup(), parse_mode="Markdown")
+            bot.answer_callback_query(call.id, "Muvaffaqiyatli bajarildi!")
+        except Exception as e:
+            bot.answer_callback_query(call.id, "Xaridor botni bloklagan bo'lishi mumkin.")
+
+    # =====================================================================
+    # QOLGAN ADMIN ZANJIRI (O'ZGARISHSİZ TO'LIQ SAQLANDI)
+    # =====================================================================
+    elif data == "adm_add_product" and user_id == MASTER_ADMIN_ID:
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("📁 Mavjud guruh ichiga", callback_data="adm_exist_g"),
                    types.InlineKeyboardButton("✨ Yangi guruh ochish", callback_data="adm_new_g"))
         bot.send_message(chat_id, "Qanday guruhga tovar qo'shmoqchisiz?", reply_markup=markup)
         bot.answer_callback_query(call.id)
 
-    elif data == "adm_new_g" and user_id == ADMIN_ID:
+    elif data == "adm_new_g" and user_id == MASTER_ADMIN_ID:
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("✅ KG orqali", callback_data="adm_ng_kg"),
                    types.InlineKeyboardButton("📦 QOP orqali", callback_data="adm_ng_qop"))
         bot.edit_message_text("Yangi guruh uchun asosiy o'lchov turini tanlang:", chat_id, msg_id, reply_markup=markup)
 
-    elif data.startswith("adm_ng_") and user_id == ADMIN_ID:
+    elif data.startswith("adm_ng_") and user_id == MASTER_ADMIN_ID:
         unit = data.split("_")[2]
         admin_states[user_id] = {"new_g_unit": unit}
         msg = bot.send_message(chat_id, "📝 Yangi guruhga nom bering:")
         bot.register_next_step_handler(msg, step_save_new_group)
         bot.answer_callback_query(call.id)
 
-    elif data == "adm_exist_g" and user_id == ADMIN_ID:
+    elif data == "adm_exist_g" and user_id == MASTER_ADMIN_ID:
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM groups")
@@ -429,14 +578,14 @@ def handle_callbacks(call):
         for g in groups: markup.add(types.InlineKeyboardButton(g['name'], callback_data=f"adm_selg_{g['id']}"))
         bot.edit_message_text("Mavjud guruhni tanlang:", chat_id, msg_id, reply_markup=markup)
 
-    elif data.startswith("adm_selg_") and user_id == ADMIN_ID:
+    elif data.startswith("adm_selg_") and user_id == MASTER_ADMIN_ID:
         g_id = int(data.split("_")[2])
         admin_states[user_id] = {"group_id": g_id}
         msg = bot.send_message(chat_id, "🖼 Endi tovar rasmini yuboring:")
         bot.register_next_step_handler(msg, step_save_photo)
         bot.answer_callback_query(call.id)
         
-    elif data == "adm_del_product" and user_id == ADMIN_ID:
+    elif data == "adm_del_product" and user_id == MASTER_ADMIN_ID:
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT id, name FROM products")
@@ -451,7 +600,7 @@ def handle_callbacks(call):
         bot.send_message(chat_id, "O'chirmoqchi bo'lgan tovaringiz ustiga bosing:", reply_markup=markup)
         bot.answer_callback_query(call.id)
         
-    elif data.startswith("del_") and user_id == ADMIN_ID:
+    elif data.startswith("del_") and user_id == MASTER_ADMIN_ID:
         prod_id = int(data.split("_")[1])
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -461,48 +610,15 @@ def handle_callbacks(call):
         bot.answer_callback_query(call.id, "Tovar muvaffaqiyatli o'chirildi!")
         bot.edit_message_text("Tovar o'chirildi. Admin panel orqali ishlashda davom etishingiz mumkin.", chat_id, msg_id)
 
-    elif data == "adm_add_promo" and user_id == ADMIN_ID:
+    elif data == "adm_add_promo" and user_id == MASTER_ADMIN_ID:
         msg = bot.send_message(chat_id, "🔑 Yangi promokod so'zini kiriting (Masalan: VIP2026):")
         bot.register_next_step_handler(msg, step_promo_code)
         bot.answer_callback_query(call.id)
-
-    elif data == "clear_cart":
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM cart WHERE user_id = ?", (user_id,))
-        conn.commit()
-        conn.close()
-        bot.edit_message_text("Savat tozalandi.", chat_id, msg_id)
-
-    elif data == "checkout_cart":
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT c.quantity, c.unit, p.name, p.price, p.qop_weight, p.delivery_price FROM cart c JOIN products p ON c.product_id = p.id WHERE c.user_id = ?", (user_id,))
-        items = cursor.fetchall()
-        
-        if not items:
-            bot.answer_callback_query(call.id, "Savat bo'sh!")
-            return
-            
-        order_text = f"🔔 **Yangi Buyurtma!**\n👤 Xaridor: {call.from_user.first_name}\n🆔 ID: `{user_id}`\n\n"
-        total = 0
-        for i in items:
-            cost = i['price'] * i['quantity'] if i['unit'] == 'qop' else (i['price']/i['qop_weight'] if i['qop_weight'] > 0 else i['price']) * i['quantity']
-            total += cost
-            format_qty = int(i['quantity']) if i['quantity'] == int(i['quantity']) else i['quantity']
-            order_text += f"▪️ {i['name']} - {format_qty} {i['unit'].upper()} = {int(cost)} so'm\n"
-            
-        bot.send_message(ADMIN_ID, order_text + f"\n💰 Jami: {int(total)} so'm\n📞 [Xaridor bilan bog'lanish](tg://user?id={user_id})", parse_mode="Markdown")
-        cursor.execute("DELETE FROM cart WHERE user_id = ?", (user_id,))
-        conn.commit()
-        conn.close()
-        bot.edit_message_text("✅ Buyurtma adminga yuborildi! Tez orada siz bilan bog'lanamiz.", chat_id, msg_id)
 
 # =====================================================================
 # 7. MAHSUS FUNKSIYA: FOYDALANUVCHI KLAVIATURADAN YOZIB XARID QILISHI
 # =====================================================================
 def process_direct_quantity_input(message, p_id):
-    # Agar foydalanuvchi menyudagi tugmalardan birini bossa jarayonni bekor qilamiz
     if message.text in ["TOVARLAR 🌐", "🛒 Savat", "🚚 Yetkazib berish", "ℹ️ Biz haqimizda", "🛠 Admin Panel"]:
         handle_text_messages(message)
         return
@@ -513,18 +629,15 @@ def process_direct_quantity_input(message, p_id):
         qty = 0
         unit = "qop"
         
-        # Agar "kg" yozuvi bo'lsa
         if "kg" in text:
             qty = float(text.replace("kg", ""))
             unit = "kg"
         else:
-            # Agar faqat raqam bo'lsa
             qty = float(text)
             unit = "qop"
             
         if qty <= 0: raise ValueError
         
-        # Bazadan tovar malumotini olamiz
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT price, qop_weight FROM products WHERE id = ?", (p_id,))
@@ -533,15 +646,11 @@ def process_direct_quantity_input(message, p_id):
         
         if not p: return
 
-        # Narxni hisoblash
-        if unit == 'qop':
-            total_p = p['price'] * qty
-        else:
-            total_p = (p['price'] / p['qop_weight']) * qty if p['qop_weight'] > 0 else p['price'] * qty
+        if unit == 'qop': total_p = p['price'] * qty
+        else: total_p = (p['price'] / p['qop_weight']) * qty if p['qop_weight'] > 0 else p['price'] * qty
             
         format_qty = int(qty) if qty == int(qty) else qty
         
-        # Tasdiqlash va Savatga qoshish tugmasi
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(
             types.InlineKeyboardButton(f"🛒 {format_qty} {unit.upper()} = {int(total_p):,} so'm (Savatga qo'shish)", 
@@ -559,9 +668,9 @@ def process_direct_quantity_input(message, p_id):
 # =====================================================================
 
 def step_save_new_group(message):
-    if message.from_user.id != ADMIN_ID: return
+    if message.from_user.id != MASTER_ADMIN_ID: return
     g_name = message.text.strip()
-    g_unit = admin_states[ADMIN_ID]["new_g_unit"]
+    g_unit = admin_states[MASTER_ADMIN_ID]["new_g_unit"]
     
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -570,51 +679,51 @@ def step_save_new_group(message):
     conn.commit()
     conn.close()
     
-    admin_states[ADMIN_ID] = {"group_id": g_id}
+    admin_states[MASTER_ADMIN_ID] = {"group_id": g_id}
     msg = bot.send_message(message.chat.id, f"✅ Guruh yaratildi! Endi shu guruhga tovar qo'shamiz.\n\n🖼 Tovar rasmini yuboring:")
     bot.register_next_step_handler(msg, step_save_photo)
 
 def step_save_photo(message):
     if not message.photo:
-        msg = bot.send_message(ADMIN_ID, "❌ Rasm yuboring:")
+        msg = bot.send_message(MASTER_ADMIN_ID, "❌ Rasm yuboring:")
         bot.register_next_step_handler(msg, step_save_photo)
         return
-    admin_states[ADMIN_ID]["photo_id"] = message.photo[-1].file_id
-    msg = bot.send_message(ADMIN_ID, "📝 Tovar nomini kiriting:")
+    admin_states[MASTER_ADMIN_ID]["photo_id"] = message.photo[-1].file_id
+    msg = bot.send_message(MASTER_ADMIN_ID, "📝 Tovar nomini kiriting:")
     bot.register_next_step_handler(msg, step_save_name)
 
 def step_save_name(message):
-    admin_states[ADMIN_ID]["name"] = message.text
-    msg = bot.send_message(ADMIN_ID, "💰 Tovar narxini kiriting (Agar qop bo'lsa 1 qop narxi, kilo bo'lsa kg narxi):")
+    admin_states[MASTER_ADMIN_ID]["name"] = message.text
+    msg = bot.send_message(MASTER_ADMIN_ID, "💰 Tovar narxini kiriting (Agar qop bo'lsa 1 qop narxi, kilo bo'lsa kg narxi):")
     bot.register_next_step_handler(msg, step_save_price)
 
 def step_save_price(message):
     try:
-        admin_states[ADMIN_ID]["price"] = float(message.text)
-        msg = bot.send_message(ADMIN_ID, "📦 Qop necha kilo keladi? (Faqat kg da sotilsa 00 yozing):")
+        admin_states[MASTER_ADMIN_ID]["price"] = float(message.text)
+        msg = bot.send_message(MASTER_ADMIN_ID, "📦 Qop necha kilo keladi? (Faqat kg da sotilsa 00 yozing):")
         bot.register_next_step_handler(msg, step_save_weight)
     except:
-        msg = bot.send_message(ADMIN_ID, "❌ Faqat raqam yozing:")
+        msg = bot.send_message(MASTER_ADMIN_ID, "❌ Faqat raqam yozing:")
         bot.register_next_step_handler(msg, step_save_price)
 
 def step_save_weight(message):
     try:
-        admin_states[ADMIN_ID]["q_weight"] = 0.0 if message.text == "00" else float(message.text)
-        msg = bot.send_message(ADMIN_ID, "📝 Tovar haqida tavsif yozing:")
+        admin_states[MASTER_ADMIN_ID]["q_weight"] = 0.0 if message.text == "00" else float(message.text)
+        msg = bot.send_message(MASTER_ADMIN_ID, "📝 Tovar haqida tavsif yozing:")
         bot.register_next_step_handler(msg, step_save_desc)
     except:
-        msg = bot.send_message(ADMIN_ID, "❌ Kiloni faqat raqamda yoki 00 qilib yozing:")
+        msg = bot.send_message(MASTER_ADMIN_ID, "❌ Kiloni faqat raqamda yoki 00 qilib yozing:")
         bot.register_next_step_handler(msg, step_save_weight)
 
 def step_save_desc(message):
-    admin_states[ADMIN_ID]["desc"] = message.text
-    msg = bot.send_message(ADMIN_ID, "🚚 Dastavka narxini kiriting:")
+    admin_states[MASTER_ADMIN_ID]["desc"] = message.text
+    msg = bot.send_message(MASTER_ADMIN_ID, "🚚 Dastavka narxini kiriting:")
     bot.register_next_step_handler(msg, step_save_final)
 
 def step_save_final(message):
     try:
         del_price = float(message.text)
-        state = admin_states[ADMIN_ID]
+        state = admin_states[MASTER_ADMIN_ID]
         
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -625,24 +734,24 @@ def step_save_final(message):
         conn.commit()
         conn.close()
         
-        bot.send_message(ADMIN_ID, "✅ Tovar muvaffaqiyatli saqlandi!")
+        bot.send_message(MASTER_ADMIN_ID, "✅ Tovar muvaffaqiyatli saqlandi!")
     except:
-        msg = bot.send_message(ADMIN_ID, "❌ Dastavka narxini raqamda yozing:")
+        msg = bot.send_message(MASTER_ADMIN_ID, "❌ Dastavka narxini raqamda yozing:")
         bot.register_next_step_handler(msg, step_save_final)
 
 def step_promo_code(message):
-    admin_states[ADMIN_ID] = {"p_code": message.text.strip().upper()}
-    msg = bot.send_message(ADMIN_ID, "🎁 Ushbu promokod uchun mukofot matnini yozing:")
+    admin_states[MASTER_ADMIN_ID] = {"p_code": message.text.strip().upper()}
+    msg = bot.send_message(MASTER_ADMIN_ID, "🎁 Ushbu promokod uchun mukofot matnini yozing:")
     bot.register_next_step_handler(msg, step_promo_text)
 
 def step_promo_text(message):
-    p_code = admin_states[ADMIN_ID]["p_code"]
+    p_code = admin_states[MASTER_ADMIN_ID]["p_code"]
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("INSERT OR REPLACE INTO promocodes (code, reward_text) VALUES (?, ?)", (p_code, message.text))
     conn.commit()
     conn.close()
-    bot.send_message(ADMIN_ID, f"✅ Promokod tayyor!\nKod: `{p_code}`", parse_mode="Markdown")
+    bot.send_message(MASTER_ADMIN_ID, f"✅ Promokod tayyor!\nKod: `{p_code}`", parse_mode="Markdown")
 
 # =====================================================================
 # 9. INFINITY POLLING (ASOSIY ISHGA TUSHIRISH)
