@@ -2,9 +2,9 @@
 """
 LOYIHA: TULPOR SAVDO MARKAZI BOTI
 YANGILANISH: Barcha eski va yangi sozlamalar 100% saqlangan holda:
-- SQL sintaksisidagi tutuq belgilari (`'`) sababli yuzaga kelgan OperationalError butunlay tuzatildi.
-- Parametrlangan xavfsiz SQL tizimi joriy etildi.
-- Barcha funksiyalar mukammal holatga keltirildi.
+- INLINE TUGMALAR UCHUN "MULTITHREADING" QO'SHILDI: Tugmalar endi yashin tezligida ishlaydi (num_threads=50).
+- SQL sintaksisidagi tutuq belgilari tuzatilgan, parametrlangan xavfsiz SQL tizimi saqlangan.
+- Barcha funksiyalar (Lokatsiya, Lichka, Promokod, Savat va hk) mukammal holatda saqlangan.
 """
 
 import os
@@ -36,8 +36,9 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 try:
-    bot = telebot.TeleBot(TOKEN, parse_mode=None)
-    logger.info("Bot ob'ekti muvaffaqiyatli yaratildi.")
+    # ⚡️ INLINE TUGMALAR O'TA TEZ ISHLASHI UCHUN OQIMLAR SONI 50 TAGA OSHIRILDI ⚡️
+    bot = telebot.TeleBot(TOKEN, parse_mode=None, num_threads=50)
+    logger.info("Bot ob'ekti muvaffaqiyatli yaratildi va maksimal tezlikka sozlandi.")
 except Exception as e:
     logger.error(f"Botni ishga tushirishda xatolik: {e}")
     sys.exit(1)
@@ -134,7 +135,7 @@ def init_database():
     cursor.execute("CREATE TABLE IF NOT EXISTS user_persistent_states (user_id INTEGER PRIMARY KEY, state TEXT, context TEXT)")
     cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
     
-    # PARAMETRLANGAN SO'ROVLAR: Imlo va belgi xatolarini butunlay yo'qotadi
+    # PARAMETRLANGAN SO'ROVLAR
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", 
                    ('about_text', '🐎 *Tulpor savdo markazi* 🌟\n\n🤝 Biz sizga eng sifatli mahsulotlarni eng hamyonbop narxlarda taqdim etamiz!\n✅ Ishonchli xizmat, halollik va tezkorlik bizning oliy maqsadimizdir.'))
     
@@ -362,7 +363,7 @@ def handle_all_messages(message):
                     clear_user_state(user_id)
                     bot.send_message(message.chat.id, "✅ Video qo'llanma muvaffaqiyatli saqlandi!")
                 else:
-                    bot.send_message(message.chat.id, "❌ Iltimahslor, faqat video formatida qo'llanma yuboring:")
+                    bot.send_message(message.chat.id, "❌ Iltimos, faqat video formatida qo'llanma yuboring:")
                 return
                 
             elif state == "WAITING_FOR_EDIT_PRICE":
@@ -631,7 +632,7 @@ def handle_all_messages(message):
         conn.close()
 
 # =====================================================================
-# 7. INLINE CALLBACK HANDLERS (TEZLASHTIRILGAN VA XATOSIZ REJIM)
+# 7. INLINE CALLBACK HANDLERS (O'TA TEZISHLATILGAN MULTITHREAD REJIMI)
 # =====================================================================
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
@@ -640,6 +641,7 @@ def handle_callbacks(call):
     chat_id = call.message.chat.id
     msg_id = call.message.message_id
 
+    # SO'ROVNI DARHOL YOPISH VA QOTIShNI OLDINI OLISH
     bot.answer_callback_query(call.id)
 
     if data == "adm_set_loc" and user_id == MASTER_ADMIN_ID:
@@ -1010,4 +1012,3 @@ if __name__ == "__main__":
         except Exception as e:
             logger.error(f"Polling xatolik: {e}")
             time.sleep(5)
-        
