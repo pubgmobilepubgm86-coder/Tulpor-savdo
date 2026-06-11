@@ -138,7 +138,7 @@ def init_database():
     
     # Emojilar bilan chiroyli ma'lumotlar kiritilmoqda
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('about_text', '🐎 *Tulpor savdo markazi* 🌟\n\n🤝 Biz sizga eng sifatli mahsulotlarni eng hamyonbop narxlarda taqdim etamiz!\n✅ Ishonchli xizmat, halollik va tezkorlik bizning oliy maqsadimizdir.')")
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('delivery_text', '🚚 *Yetkazib berish shartlari:* 📦\n\n📍 Namangan viloyati va Chortoq tumani bo''ylab tezkor hamda xavfsiz yetkazib berish xizmati maqsadga muvofiq.\n⚡️ Buyurtmangiz xavfsiz va o\\'z vaqtida yetib boradi!')")
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('delivery_text', '🚚 *Yetkazib berish shartlari:* 📦\n\n📍 Namangan viloyati va Chortoq tumani bo''ylab tezkor hamda xavfsiz yetkazib berish xizmati maqsadga muvofiq.\n⚡️ Buyurtmangiz xavfsiz va o\\"z"vaqtida yetib boradi!')")
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('tovarlar_clicks', '0')")
     
     conn.commit()
